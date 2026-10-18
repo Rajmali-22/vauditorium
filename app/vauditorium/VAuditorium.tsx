@@ -12,7 +12,7 @@ import './vauditorium.css';
 const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December'];
 const INSTITUTES = ['VIT','VSIT','VP','VIIE','VMMS'];
 
-interface EventItem {
+export interface EventItem {
   id: number | string;
   date: string;
   title: string;
@@ -26,6 +26,7 @@ interface EventItem {
   equipment: string;
   stream: boolean;
   result?: string;
+  streamUrl?: string;
 }
 
 interface RequestItem {
@@ -45,15 +46,6 @@ interface RequestItem {
   notes: string;
   attendees?: number;
 }
-
-const initialEvents: EventItem[] = [
-  { id: 1, date: '2026-10-20', title: 'Annual Research Symposium', institute: 'VIT', type: 'Academic', time: '09:30 AM – 04:00 PM', owner: 'Research Cell', attendees: 280, status: 'Booked', description: 'A full-day showcase of student and faculty research, presentations and poster sessions.', equipment: 'Projector, microphones, recording', stream: true },
-  { id: 2, date: '2026-10-22', title: 'Industry Connect: Future of AI', institute: 'VSIT', type: 'Talk', time: '02:00 PM – 05:00 PM', owner: 'IT Forum', attendees: 180, status: 'Booked', description: 'Guest talks and a panel discussion with industry professionals.', equipment: 'Projector, 4 microphones', stream: true },
-  { id: 3, date: '2026-10-25', title: 'Inter-college Hackathon', institute: 'VIIE', type: 'Competition', time: '08:00 AM – 08:00 PM', owner: 'Innovation Council', attendees: 350, status: 'Booked', description: 'A collaborative build event bringing together teams from across institutes.', equipment: 'Wi-Fi, projector, sound system', stream: false },
-  { id: 4, date: '2026-10-28', title: 'Scholarship Felicitation', institute: 'VMMS', type: 'Ceremony', time: '10:00 AM – 01:00 PM', owner: 'Student Affairs', attendees: 220, status: 'Booked', description: 'Recognising scholarship recipients and celebrating academic achievement.', equipment: 'Stage, microphones, lectern', stream: true },
-  { id: 5, date: '2026-11-03', title: 'Design Thinking Workshop', institute: 'VP', type: 'Workshop', time: '10:00 AM – 03:00 PM', owner: 'Design Club', attendees: 120, status: 'Booked', description: 'A practical workshop on human-centred problem solving.', equipment: 'Projector, movable seating', stream: false },
-  { id: 6, date: '2026-10-17', title: 'Welcome to VDT', institute: 'VIT', type: 'Induction', time: '10:00 AM – 12:30 PM', owner: 'Central Student Council', attendees: 400, status: 'Past event', description: 'An introduction to campus life, student services and institute communities.', equipment: 'Full AV setup', stream: true, result: 'Event completed successfully' },
-];
 
 const initialRequests: RequestItem[] = [
   { id: 'VA-026', title: 'Inter-college Hackathon', institute: 'VIIE', date: '2026-10-25', submitted: '14 Oct 2026', applicant: 'Innovation Council', status: 'Under review', people: 350, docs: ['Permission letter.pdf','Event proposal.pdf'], purpose: 'A 12-hour collaborative hackathon for student teams across VDT institutes.', equipment: 'Projector, sound system, Wi-Fi access', contact: 'Aarav Mehta', email: 'innovation@viie.edu', notes: 'Please confirm additional power outlets for the team workstations.' },
@@ -252,7 +244,7 @@ function BookingForm({
   );
 }
 
-export default function VAuditorium() {
+export default function VAuditorium({ events: initialEvents }: { events: EventItem[] }) {
   const now = new Date('2026-10-17T12:00:00');
   const [active, setActive] = useState('Calendar');
   const [role, setRole] = useState('Viewer');
