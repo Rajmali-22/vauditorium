@@ -9,7 +9,9 @@ import {
   bigint,
   timestamp,
   index,
+  check,
 } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 import {
   instituteEnum,
   eventTypeEnum,
@@ -31,8 +33,10 @@ export const applications = pgTable(
     institute: instituteEnum("institute").notNull(),
     type: eventTypeEnum("type").notNull(),
     date: date("date", { mode: "string" }).notNull(),
-    startTime: time("start_time"),
-    endTime: time("end_time"),
+    // The slot asked for. Applications may overlap each other; only approved
+    // events may not, so the approver decides between competing requests.
+    startTime: time("start_time").notNull(),
+    endTime: time("end_time").notNull(),
     purpose: text("purpose").notNull(),
     requirements: text("requirements"),
     equipment: text("equipment"),
@@ -50,6 +54,10 @@ export const applications = pgTable(
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
+    check(
+      "applications_within_hours",
+      sql`${t.startTime} >= '07:00' AND ${t.endTime} <= '19:00' AND ${t.startTime} < ${t.endTime}`,
+    ),
     index("applications_status_idx").on(t.status, t.submittedAt),
     index("applications_date_idx").on(t.date),
   ],

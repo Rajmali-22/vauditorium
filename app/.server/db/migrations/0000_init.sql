@@ -36,8 +36,8 @@ CREATE TABLE "applications" (
 	"institute" "institute" NOT NULL,
 	"type" "event_type" NOT NULL,
 	"date" date NOT NULL,
-	"start_time" time,
-	"end_time" time,
+	"start_time" time NOT NULL,
+	"end_time" time NOT NULL,
 	"purpose" text NOT NULL,
 	"requirements" text,
 	"equipment" text,
@@ -52,14 +52,15 @@ CREATE TABLE "applications" (
 	"decided_at" timestamp with time zone,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
-	CONSTRAINT "applications_number_unique" UNIQUE("number")
+	CONSTRAINT "applications_number_unique" UNIQUE("number"),
+	CONSTRAINT "applications_within_hours" CHECK ("applications"."start_time" >= '07:00' AND "applications"."end_time" <= '19:00' AND "applications"."start_time" < "applications"."end_time")
 );
 --> statement-breakpoint
 CREATE TABLE "events" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"date" date NOT NULL,
-	"start_time" time,
-	"end_time" time,
+	"start_time" time NOT NULL,
+	"end_time" time NOT NULL,
 	"title" text NOT NULL,
 	"institute" "institute" NOT NULL,
 	"type" "event_type" NOT NULL,
@@ -74,7 +75,8 @@ CREATE TABLE "events" (
 	"application_id" uuid,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
-	CONSTRAINT "events_application_id_unique" UNIQUE("application_id")
+	CONSTRAINT "events_application_id_unique" UNIQUE("application_id"),
+	CONSTRAINT "events_within_hours" CHECK ("events"."start_time" >= '07:00' AND "events"."end_time" <= '19:00' AND "events"."start_time" < "events"."end_time")
 );
 --> statement-breakpoint
 CREATE TABLE "suggestions" (
@@ -92,6 +94,5 @@ CREATE INDEX "application_documents_app_idx" ON "application_documents" USING bt
 CREATE INDEX "application_messages_app_idx" ON "application_messages" USING btree ("application_id","created_at");--> statement-breakpoint
 CREATE INDEX "applications_status_idx" ON "applications" USING btree ("status","submitted_at");--> statement-breakpoint
 CREATE INDEX "applications_date_idx" ON "applications" USING btree ("date");--> statement-breakpoint
-CREATE UNIQUE INDEX "events_one_confirmed_per_day" ON "events" USING btree ("date") WHERE status = 'confirmed';--> statement-breakpoint
-CREATE INDEX "events_date_idx" ON "events" USING btree ("date");--> statement-breakpoint
+CREATE INDEX "events_date_idx" ON "events" USING btree ("date","start_time");--> statement-breakpoint
 CREATE INDEX "suggestions_created_idx" ON "suggestions" USING btree ("created_at");

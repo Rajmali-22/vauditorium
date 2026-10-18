@@ -12,6 +12,33 @@ export const EVENT_TYPE_LABELS = {
 
 export type EventType = keyof typeof EVENT_TYPE_LABELS;
 
+// Bookable hours. A booking can start and end at any time inside them, and a
+// day can hold several bookings as long as none overlap. The database enforces
+// both (see the events table); these are for forms to check before submitting.
+export const AUDITORIUM_OPENS = "07:00";
+export const AUDITORIUM_CLOSES = "19:00";
+
+/** "7:5" or "07:05:00" -> "07:05", so times compare as strings. */
+function hhmm(t: string): string {
+  const [h, m] = t.split(":");
+  return `${h.padStart(2, "0")}:${(m ?? "0").padStart(2, "0")}`;
+}
+
+/** Whether a start/end pair is a valid booking: in order and within hours. */
+export function isWithinHours(start: string, end: string): boolean {
+  const s = hhmm(start);
+  const e = hhmm(end);
+  return s >= AUDITORIUM_OPENS && e <= AUDITORIUM_CLOSES && s < e;
+}
+
+/**
+ * Whether two slots on the same day overlap. Slots are half-open, so one
+ * booking may end at 12:00 and the next start at 12:00.
+ */
+export function slotsOverlap(a: { start: string; end: string }, b: { start: string; end: string }): boolean {
+  return hhmm(a.start) < hhmm(b.end) && hhmm(b.start) < hhmm(a.end);
+}
+
 /** "14:05:00" -> "02:05 PM" */
 export function formatTime(t: string): string {
   const [h, m] = t.split(":").map(Number);
@@ -20,10 +47,9 @@ export function formatTime(t: string): string {
   return `${String(hour).padStart(2, "0")}:${String(m).padStart(2, "0")} ${suffix}`;
 }
 
-/** "09:30 AM – 04:00 PM", or a placeholder while timings are unconfirmed. */
-export function formatTimeRange(start: string | null, end: string | null): string {
-  if (!start) return "Time to be confirmed";
-  return end ? `${formatTime(start)} – ${formatTime(end)}` : `From ${formatTime(start)}`;
+/** "09:30 AM – 04:00 PM" */
+export function formatTimeRange(start: string, end: string): string {
+  return `${formatTime(start)} – ${formatTime(end)}`;
 }
 
 // The auditorium is in Mumbai. The server runs in UTC, where "today" turns over

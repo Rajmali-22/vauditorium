@@ -1,5 +1,5 @@
 {
-  "id": "44ae3670-74f1-46fb-9636-9dd3d8abb654",
+  "id": "8a69fdd9-c903-43e8-9839-c9d1fa22127d",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -267,13 +267,13 @@
           "name": "start_time",
           "type": "time",
           "primaryKey": false,
-          "notNull": false
+          "notNull": true
         },
         "end_time": {
           "name": "end_time",
           "type": "time",
           "primaryKey": false,
-          "notNull": false
+          "notNull": true
         },
         "purpose": {
           "name": "purpose",
@@ -416,7 +416,12 @@
         }
       },
       "policies": {},
-      "checkConstraints": {},
+      "checkConstraints": {
+        "applications_within_hours": {
+          "name": "applications_within_hours",
+          "value": "\"applications\".\"start_time\" >= '07:00' AND \"applications\".\"end_time\" <= '19:00' AND \"applications\".\"start_time\" < \"applications\".\"end_time\""
+        }
+      },
       "isRLSEnabled": false
     },
     "public.events": {
@@ -440,13 +445,13 @@
           "name": "start_time",
           "type": "time",
           "primaryKey": false,
-          "notNull": false
+          "notNull": true
         },
         "end_time": {
           "name": "end_time",
           "type": "time",
           "primaryKey": false,
-          "notNull": false
+          "notNull": true
         },
         "title": {
           "name": "title",
@@ -543,27 +548,17 @@
         }
       },
       "indexes": {
-        "events_one_confirmed_per_day": {
-          "name": "events_one_confirmed_per_day",
+        "events_date_idx": {
+          "name": "events_date_idx",
           "columns": [
             {
               "expression": "date",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "where": "status = 'confirmed'",
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "events_date_idx": {
-          "name": "events_date_idx",
-          "columns": [
+            },
             {
-              "expression": "date",
+              "expression": "start_time",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -601,7 +596,12 @@
         }
       },
       "policies": {},
-      "checkConstraints": {},
+      "checkConstraints": {
+        "events_within_hours": {
+          "name": "events_within_hours",
+          "value": "\"events\".\"start_time\" >= '07:00' AND \"events\".\"end_time\" <= '19:00' AND \"events\".\"start_time\" < \"events\".\"end_time\""
+        }
+      },
       "isRLSEnabled": false
     },
     "public.suggestions": {

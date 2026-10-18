@@ -65,11 +65,13 @@ npm run db:generate   # writes a SQL migration to app/.server/db/migrations
 npm run db:migrate    # applies it
 ```
 
-Commit the generated migration with the schema change.
+Commit the generated migration with the schema change. Deploys run migrations
+in CI before shipping; see [docs/deploys.md](docs/deploys.md). How uploaded
+documents are stored: [docs/documents.md](docs/documents.md).
 
 | Table                   | Holds                                                       |
 | ----------------------- | ----------------------------------------------------------- |
-| `events`                | The public calendar. At most one confirmed event per day.   |
+| `events`                | The public calendar. Any slots 07:00–19:00, never overlapping |
 | `applications`          | Booking requests, from submission to approval or decline.   |
 | `application_documents` | Permission letters and documents attached to an application |
 | `application_messages`  | The approval trail: queries, document requests, decisions   |
