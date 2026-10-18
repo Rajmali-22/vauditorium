@@ -37,13 +37,22 @@ Two secrets on the `production-database` GitHub environment
 | `PRODUCTION_DATABASE_URL` | The Neon **direct** (unpooled) connection string; migrations need it                 |
 | `VERCEL_DEPLOY_HOOK_URL`  | Vercel project, Settings, Git, Deploy Hooks — create one for `main`                   |
 
-And on the Vercel project, `DATABASE_URL` set to the Neon **pooled** connection
-string.
-
 Until both secrets exist the workflow does nothing and says so in its run
 summary. Add required reviewers on the environment if a deploy should wait for
 a human; the secrets are scoped to it, so nothing else in CI can read the
 production connection string.
+
+And on the Vercel project:
+
+| Variable             | Value                                                              |
+| -------------------- | ------------------------------------------------------------------ |
+| `DATABASE_URL`       | The Neon **pooled** connection string                              |
+| `R2_*` (four)        | The private document bucket; see [documents.md](documents.md)      |
+| `SENDER_HASH_SECRET` | A long random string; keys the suggestion box's rate-limit hashes |
+
+The app refuses to start the affected feature, rather than falling back to
+something unsafe, when the R2 variables or `SENDER_HASH_SECRET` are missing in
+production.
 
 ## Writing migrations
 

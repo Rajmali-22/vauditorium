@@ -1,5 +1,12 @@
 import { z } from "zod";
 import { isWithinHours } from "~/lib/events";
+import {
+  SUGGESTION_CATEGORIES,
+  SUGGESTION_MAX_LENGTH,
+  SUGGESTION_MIN_LENGTH,
+  SUGGESTION_STATUS_LABELS,
+  type SuggestionStatus,
+} from "~/lib/suggestions";
 
 const time = z.string({ error: "Choose a start and end time" }).regex(/^\d{2}:\d{2}$/, "Use HH:MM");
 const text = (max: number) => z.string().trim().max(max);
@@ -37,6 +44,22 @@ export const reviewSchema = z.discriminatedUnion("intent", [
 
 export const replySchema = z.object({
   message: required(2000, "Write a reply"),
+});
+
+export const suggestionSchema = z.object({
+  text: required(SUGGESTION_MAX_LENGTH, "Write your suggestion").refine(
+    (v) => v.length >= SUGGESTION_MIN_LENGTH,
+    `Write at least ${SUGGESTION_MIN_LENGTH} characters`,
+  ),
+  category: z.enum(SUGGESTION_CATEGORIES, { error: "Choose a category from the list" }).optional().default("General"),
+  // Honeypot: hidden from people, filled in by bots that fill in everything.
+  website: z.string().optional(),
+});
+
+export const suggestionStatusSchema = z.object({
+  status: z.enum(Object.keys(SUGGESTION_STATUS_LABELS) as [SuggestionStatus, ...SuggestionStatus[]], {
+    error: "Unknown status",
+  }),
 });
 
 /** FormData to a plain object, dropping empty fields so optionals apply. */

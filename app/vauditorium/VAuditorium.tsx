@@ -1,7 +1,9 @@
-import React, { useMemo, useState } from 'react';
-import { useRevalidator } from 'react-router';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { Link, useNavigate, useParams, useRevalidator, useSearchParams } from 'react-router';
 import { APPLICATION_STATUS_LABELS, OPEN_STATUSES, type ApplicationView, type TrailEntry } from '~/lib/applications';
 import { AUDITORIUM_CLOSES, AUDITORIUM_OPENS, isWithinHours, slotsOverlap } from '~/lib/events';
+import { PAGES, PAGE_ROLE, ROLE_HOME, pageForSlug, type PageName, type Role } from '~/lib/pages';
+import { SUGGESTION_CATEGORIES, SUGGESTION_MAX_LENGTH, SUGGESTION_MIN_LENGTH, SUGGESTION_STATUS_LABELS, type SuggestionStatus, type SuggestionView } from '~/lib/suggestions';
 import {
   CalendarDays, LayoutDashboard, ClipboardList,
   Lightbulb, Moon, Sun, Menu, X, ChevronLeft, ChevronRight, Plus, Search, Bell,
@@ -58,24 +60,70 @@ async function uploadAll(applicationId: string, files: File[]): Promise<string[]
 }
 
 const fmtBytes = (n: number) => n < 1024 * 1024 ? `${Math.max(1, Math.round(n / 1024))} KB` : `${(n / 1024 / 1024).toFixed(1)} MB`;
-const fmtWhen = (iso: string) => new Date(iso).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+// Dates are formatted by hand, not with toLocaleDateString: Node and each
+// browser ship different locale data ("Sun, 18 October" vs "Sun 18 October"),
+// and any difference between the server's HTML and the browser's first render
+// makes React discard the page and rebuild it.
+const WEEKDAYS = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
 
-const fmtDate = (iso: string, opts: Intl.DateTimeFormatOptions = { day: 'numeric', month: 'short', year: 'numeric' }) =>
-  new Date(`${iso}T12:00:00`).toLocaleDateString('en-IN', opts);
+type DateParts = { weekday?: 'short' | 'long'; day?: 'numeric' | '2-digit'; month?: 'short' | 'long'; year?: 'numeric' };
+
+/** "18 Oct 2026", "Sun, 18 October", "Sunday, 18 October 2026", "OCT"… */
+const fmtDate = (iso: string, opts: DateParts = { day: 'numeric', month: 'short', year: 'numeric' }) => {
+  const [y, m, d] = iso.split('-').map(Number);
+  const weekday = WEEKDAYS[new Date(Date.UTC(y, m - 1, d)).getUTCDay()];
+  const parts = [
+    opts.day && (opts.day === '2-digit' ? String(d).padStart(2, '0') : String(d)),
+    opts.month && (opts.month === 'long' ? MONTHS[m - 1] : MONTHS[m - 1].slice(0, 3)),
+    opts.year && String(y),
+  ].filter(Boolean).join(' ');
+  if (!opts.weekday) return parts;
+  return `${opts.weekday === 'long' ? weekday : weekday.slice(0, 3)}, ${parts}`;
+};
+
+/** An instant as "18 Oct, 03:05 PM" in India time, wherever it is rendered. */
+const fmtWhen = (iso: string) => {
+  const ist = new Date(new Date(iso).getTime() + 330 * 60_000);
+  const h = ist.getUTCHours();
+  const time = `${String(h % 12 || 12).padStart(2, '0')}:${String(ist.getUTCMinutes()).padStart(2, '0')} ${h < 12 ? 'AM' : 'PM'}`;
+  return `${ist.getUTCDate()} ${MONTHS[ist.getUTCMonth()].slice(0, 3)}, ${time}`;
+};
 
 const isoDate = (y: number, m: number, d: number) =>
   `${y}-${String(m + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
 
-function Brand() {
+function Brand({ onClick }: { onClick?: () => void }) {
   return (
-    <div className="brand">
+    <Link to={PAGES.Calendar} className="brand" aria-label="VAuditorium home" onClick={onClick}>
       <span className="brand-word">VOSS</span>
       <span className="brand-square" />
       <span className="brand-divider" />
       <span className="product-name">VAuditorium</span>
-    </div>
+    </Link>
   );
 }
+
+/** Free stretches of a day between confirmed bookings, inside opening hours. */
+function freeSlots(booked: EventItem[]): { start: string; end: string }[] {
+  const taken = booked
+    .filter(e => e.startTime && e.endTime)
+    .map(e => ({ start: e.startTime!, end: e.endTime! }))
+    .sort((a, b) => a.start.localeCompare(b.start));
+  const free: { start: string; end: string }[] = [];
+  let cursor = AUDITORIUM_OPENS;
+  for (const t of taken) {
+    if (t.start > cursor) free.push({ start: cursor, end: t.start });
+    if (t.end > cursor) cursor = t.end;
+  }
+  if (cursor < AUDITORIUM_CLOSES) free.push({ start: cursor, end: AUDITORIUM_CLOSES });
+  return free;
+}
+
+// Read and write a per-browser preference, tolerating storage being unavailable.
+const stored = {
+  get(key: string): string | null { try { return window.localStorage.getItem(key); } catch { return null; } },
+  set(key: string, value: string) { try { window.localStorage.setItem(key, value); } catch { /* private mode */ } },
+};
 
 function Status({ children }: { children: React.ReactNode }) {
   const s = String(children).toLowerCase();
@@ -365,8 +413,8 @@ function RequestDetail({ request, role, onClose, onReview, onReply }: {
           <div className="trail">
             <strong className="trail-heading">Approval trail</strong>
             {request.trail.map(t => (
-              <div className={`trail-entry trail-${t.authorRole}`} key={t.id}>
-                <div className="trail-meta"><MessageSquareText size={13} /><strong>{t.kind === 'status_change' && t.toStatus ? APPLICATION_STATUS_LABELS[t.toStatus] : TRAIL_TITLES[t.kind]}</strong><span>{t.authorName} · {fmtWhen(t.at)}</span></div>
+              <div className={`trail-entry trail-${t.authorRole}${t.id === lastRequest?.id && request.status === 'changes_requested' ? ' trail-pending' : ''}`} key={t.id}>
+                <div className="trail-meta"><MessageSquareText size={13} /><strong>{t.kind === 'status_change' && t.toStatus ? APPLICATION_STATUS_LABELS[t.toStatus] : TRAIL_TITLES[t.kind]}</strong><span>{t.authorName} · {fmtWhen(t.at)}</span>{t.id === lastRequest?.id && request.status === 'changes_requested' && <em className="trail-flag">{role === 'Applier' ? 'Awaiting your reply' : 'Awaiting applicant'}</em>}</div>
                 {t.body && <p>{t.body}</p>}
               </div>
             ))}
@@ -393,12 +441,6 @@ function RequestDetail({ request, role, onClose, onReview, onReply }: {
 
         {role === 'Applier' && open && (
           <div className="review-panel">
-            {request.status === 'changes_requested' && lastRequest && (
-              <div className="query-note">
-                <MessageSquareText size={16} />
-                <div><strong>The approver asked for</strong><p className="pre-line">{lastRequest.body}</p></div>
-              </div>
-            )}
             <Field label={request.status === 'changes_requested' ? 'Your reply' : 'Message to the approver'}>
               <textarea value={message} onChange={e => setMessage(e.target.value)} rows={3} maxLength={2000} placeholder="Add a note, or describe the documents you are attaching." disabled={busy} />
             </Field>
@@ -422,32 +464,91 @@ function RequestDetail({ request, role, onClose, onReview, onReply }: {
   );
 }
 
-export default function VAuditorium({ events, applications: requests, today }: { events: EventItem[]; applications: RequestItem[]; today: string }) {
+export default function VAuditorium({ events, applications: requests, suggestions, today }: { events: EventItem[]; applications: RequestItem[]; suggestions: SuggestionView[]; today: string }) {
   const now = new Date(`${today}T12:00:00`);
   const revalidator = useRevalidator();
-  const [active, setActive] = useState('Calendar');
-  const [role, setRole] = useState('Viewer');
+  const navigate = useNavigate();
+  const params = useParams();
+  const [searchParams, setSearchParams] = useSearchParams();
+  // The page comes from the URL; the loader has already 404'd unknown ones.
+  const active: PageName = pageForSlug(params.page) ?? 'Calendar';
+  const [role, setRoleState] = useState<Role>(PAGE_ROLE[active] ?? 'Viewer');
   const [theme, setTheme] = useState('light');
+  const searchRef = useRef<HTMLInputElement>(null);
   const [mobileNav, setMobileNav] = useState(false);
   const [month, setMonth] = useState(now.getMonth());
   const [year, setYear] = useState(now.getFullYear());
   const [selectedDate, setSelectedDate] = useState(today);
   const [selectedEvent, setSelectedEvent] = useState<EventItem | null>(null);
-  // Kept as an id so the open application refreshes when the server data does.
-  const [selectedRequestId, setSelectedRequestId] = useState<string | null>(null);
-  const selectedRequest = requests.find(r => r.id === selectedRequestId) ?? null;
-  const setSelectedRequest = (r: RequestItem | null) => setSelectedRequestId(r ? r.id : null);
+  // The open application lives in the URL (?application=VA-003), so it can be
+  // linked to and the back button closes it. Looked up in the server data, so it
+  // refreshes after every action.
+  const selectedRef = searchParams.get('application');
+  const selectedRequest = requests.find(r => r.ref === selectedRef) ?? null;
+  const setSelectedRequest = (r: RequestItem | null) => {
+    const next = new URLSearchParams(searchParams);
+    if (r) next.set('application', r.ref); else next.delete('application');
+    setSearchParams(next, { preventScrollReset: true });
+  };
   const [query, setQuery] = useState('');
   const [instituteFilter, setInstituteFilter] = useState('All institutes');
-  const [showBooking, setShowBooking] = useState(false);
   const [toast, setToast] = useState('');
-  const [suggestions, setSuggestions] = useState([{ id: 1, text: 'Add a dedicated student club showcase day', category: 'Events', date: '12 Oct 2026', status: 'Under consideration' }]);
   const [suggestion, setSuggestion] = useState('');
+  const [suggestionCategory, setSuggestionCategory] = useState<string>('General');
+  const [suggestionBusy, setSuggestionBusy] = useState(false);
+  const [suggestionError, setSuggestionError] = useState('');
   const [booking, setBooking] = useState<BookingState>(EMPTY_BOOKING);
   const [formError, setFormError] = useState('');
   const [busy, setBusy] = useState(false);
 
-  const navItems: { name: string; icon: React.ElementType; group: string }[] =
+  // A role-specific page sets the preview role; shared pages keep the last one.
+  useEffect(() => {
+    const forced = PAGE_ROLE[active];
+    if (forced) { setRoleState(forced); stored.set('vauditorium.role', forced); return; }
+    const saved = stored.get('vauditorium.role');
+    if (saved === 'Viewer' || saved === 'Applier' || saved === 'Approver') setRoleState(saved);
+  }, [active]);
+
+  useEffect(() => {
+    const saved = stored.get('vauditorium.theme');
+    if (saved === 'light' || saved === 'dark') setTheme(saved);
+  }, []);
+  useEffect(() => { stored.set('vauditorium.theme', theme); }, [theme]);
+
+  // /new-booking?date=2026-11-07 opens the form with that date filled in.
+  const bookingDate = active === 'New booking' ? searchParams.get('date') : null;
+  useEffect(() => {
+    if (bookingDate && /^\d{4}-\d{2}-\d{2}$/.test(bookingDate)) setBooking(b => ({ ...b, date: bookingDate }));
+  }, [bookingDate]);
+
+  // While a dialog is open the page behind it must not scroll.
+  const dialogOpen = !!(selectedEvent || selectedRequest);
+  useEffect(() => {
+    if (!dialogOpen) return;
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => { document.body.style.overflow = previous; };
+  }, [dialogOpen]);
+
+  // Ctrl/Cmd + K focuses search, as the hint in the search box promises.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k' && searchRef.current) {
+        e.preventDefault();
+        searchRef.current.focus();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  const setRole = (next: Role) => {
+    setRoleState(next);
+    stored.set('vauditorium.role', next);
+    navigate(ROLE_HOME[next]);
+  };
+
+  const navItems: { name: PageName; icon: React.ElementType; group: string }[] =
     role === 'Viewer' ? [
       { name: 'Calendar', icon: CalendarDays, group: 'Explore' },
       { name: 'Past events', icon: Video, group: 'Explore' },
@@ -480,10 +581,16 @@ export default function VAuditorium({ events, applications: requests, today }: {
   const days: (number | null)[] = (nullPad as (number | null)[]).concat(dayNums);
   // eventDates used for calendar markers
   const eventDates = useMemo(() => new Set(allEvents.map(e => e.date)), [events]);
+  const bookedOn = (date: string) => events.filter(e => e.date === date && (e.status === 'Booked' || e.status === 'Past event'));
   const changeMonth = (dir: number) => { const d = new Date(year, month + dir, 1); setMonth(d.getMonth()); setYear(d.getFullYear()); };
   const notify = (msg: string) => { setToast(msg); window.setTimeout(() => setToast(''), 4200); };
-  const go = (name: string) => { setActive(name); setMobileNav(false); setSelectedEvent(null); setSelectedRequest(null); if (name === 'New booking') setShowBooking(true); };
-  const bookedOn = (date: string) => events.filter(e => e.date === date && e.status === 'Booked');
+  const go = (name: PageName) => { setMobileNav(false); setSelectedEvent(null); navigate(PAGES[name]); };
+  const startBooking = (date?: string) => { setSelectedEvent(null); navigate(date ? `${PAGES['New booking']}?date=${date}` : PAGES['New booking']); };
+  const upcoming = allEvents.filter(e => e.date >= today).sort((a, b) => a.date.localeCompare(b.date) || (a.startTime ?? '').localeCompare(b.startTime ?? ''));
+  const nextEvent = upcoming[0];
+  const outcomes = allEvents.filter(e => e.result).sort((a, b) => b.date.localeCompare(a.date));
+  const selectedFree = freeSlots(bookedOn(selectedDate));
+  const selectedFullyBooked = selectedFree.length === 0;
 
   const submitBooking = async (e: React.FormEvent, files: File[]) => {
     e.preventDefault();
@@ -513,7 +620,8 @@ export default function VAuditorium({ events, applications: requests, today }: {
       const created = await post<{ id: string; ref: string }>('/api/applications', body);
       const failed = await uploadAll(created.id, files);
       revalidator.revalidate();
-      setBooking(EMPTY_BOOKING); setShowBooking(false); setActive('My applications');
+      setBooking(EMPTY_BOOKING);
+      navigate(PAGES['My applications']);
       notify(failed.length
         ? `${created.ref} submitted, but ${failed.length} file${failed.length === 1 ? '' : 's'} failed: ${failed.join(' ')} Open the application to try again.`
         : `${created.ref} submitted for review${files.length ? ` with ${files.length} document${files.length === 1 ? '' : 's'}` : ''}.`);
@@ -547,19 +655,39 @@ export default function VAuditorium({ events, applications: requests, today }: {
     notify('Reply sent. The application is back with the approver.');
   };
 
-  const submitSuggestion = (e: React.FormEvent) => {
+  const submitSuggestion = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    if (!suggestion.trim()) return;
-    setSuggestions(prev => [{ id: Date.now(), text: suggestion.trim(), category: 'General', date: fmtDate(today), status: 'Under consideration' }, ...prev]);
-    setSuggestion('');
-    notify('Suggestion submitted. Thank you.');
+    const body = new FormData(e.currentTarget);
+    setSuggestionBusy(true); setSuggestionError('');
+    try {
+      await post('/api/suggestions', body);
+      setSuggestion(''); setSuggestionCategory('General');
+      revalidator.revalidate();
+      notify('Suggestion submitted. Thank you.');
+    } catch (err) {
+      setSuggestionError(err instanceof Error ? err.message : 'Could not send the suggestion.');
+    } finally {
+      setSuggestionBusy(false);
+    }
+  };
+
+  const moderateSuggestion = async (id: string, status: SuggestionStatus) => {
+    const body = new FormData();
+    body.set('status', status);
+    try {
+      await post(`/api/suggestions/${id}/status`, body);
+      revalidator.revalidate();
+      notify(status === 'hidden' ? 'Suggestion hidden from the public list.' : `Marked ${SUGGESTION_STATUS_LABELS[status].toLowerCase()}.`);
+    } catch (err) {
+      notify(err instanceof Error ? err.message : 'Could not update the suggestion.');
+    }
   };
 
   return (
     <div className={`app theme-${theme}`} data-theme={theme}>
       <aside className={`sidebar ${mobileNav ? 'sidebar-open' : ''}`}>
         <div className="sidebar-top">
-          <Brand />
+          <Brand onClick={() => setMobileNav(false)} />
           <button className="icon-btn mobile-close" aria-label="Close menu" onClick={() => setMobileNav(false)}><X size={19} /></button>
         </div>
         <div className="workspace-label">WORKSPACE</div>
@@ -569,7 +697,7 @@ export default function VAuditorium({ events, applications: requests, today }: {
             <span className="role-picker-title">VDT Portal</span>
             <span className="role-picker-sub">Preview environment</span>
           </div>
-          <select aria-label="Preview role" value={role} onChange={e => { setRole(e.target.value); setActive(e.target.value === 'Approver' ? 'Overview' : 'Calendar'); }}>
+          <select aria-label="Preview role" value={role} onChange={e => setRole(e.target.value as Role)}>
             <option>Viewer</option><option>Applier</option><option>Approver</option>
           </select>
         </div>
@@ -577,12 +705,12 @@ export default function VAuditorium({ events, applications: requests, today }: {
           <div className="nav-group" key={group}>
             <div className="nav-label">{group}</div>
             {navItems.filter(n => n.group === group).map(item => (
-              <button key={item.name} className={`nav-item ${active === item.name ? 'active' : ''}`} onClick={() => go(item.name)}>
+              <Link key={item.name} to={PAGES[item.name]} className={`nav-item ${active === item.name ? 'active' : ''}`} aria-current={active === item.name ? 'page' : undefined} onClick={() => { setMobileNav(false); setSelectedEvent(null); }}>
                 <item.icon size={17} strokeWidth={1.8} />
                 <span>{item.name}</span>
                 {item.name === 'Applications' && pendingCount > 0 && <span className="nav-count">{pendingCount}</span>}
                 {item.name === 'My applications' && <span className="nav-count">{requests.length}</span>}
-              </button>
+              </Link>
             ))}
           </div>
         ))}
@@ -633,13 +761,13 @@ export default function VAuditorium({ events, applications: requests, today }: {
                   <p className="page-subtitle">One shared space. Five institutes. Everything in sync.</p>
                 </div>
                 <div className="heading-actions">
-                  {role === 'Applier' && <button className="btn btn-primary" onClick={() => setShowBooking(true)}><Plus size={16} /> New booking request</button>}
+                  {role === 'Applier' && <button className="btn btn-primary" onClick={() => startBooking()}><Plus size={16} /> New booking request</button>}
                 </div>
               </div>
               <div className="notice-strip">
                 <span className="notice-icon"><CalendarCheck size={17} /></span>
                 <div><strong>Check availability before you apply.</strong><span>Only VDT-approved bookings appear on the public calendar.</span></div>
-                <button className="text-action" onClick={() => { setRole('Applier'); setActive('New booking'); setShowBooking(true); }}>Request a date <ArrowUpRight size={14} /></button>
+                <button className="text-action" onClick={() => startBooking(selectedDate >= today ? selectedDate : undefined)}>Request a date <ArrowUpRight size={14} /></button>
               </div>
               <div className="calendar-layout">
                 <section className="panel calendar-panel">
@@ -647,7 +775,7 @@ export default function VAuditorium({ events, applications: requests, today }: {
                     <div><h2>Schedule</h2><p>View auditorium availability by date</p></div>
                     <div className="calendar-controls">
                       <button className="icon-btn bordered" aria-label="Previous month" onClick={() => changeMonth(-1)}><ChevronLeft size={17} /></button>
-                      <button className="month-label" onClick={() => { setMonth(9); setYear(2026); }}>{MONTHS[month]} {year}</button>
+                      <button className="month-label" onClick={() => { setMonth(now.getMonth()); setYear(now.getFullYear()); }} title="Back to this month">{MONTHS[month]} {year}</button>
                       <button className="icon-btn bordered" aria-label="Next month" onClick={() => changeMonth(1)}><ChevronRight size={17} /></button>
                       <button className="today-btn" onClick={() => { setMonth(now.getMonth()); setYear(now.getFullYear()); setSelectedDate(isoDate(now.getFullYear(), now.getMonth(), now.getDate())); }}>Today</button>
                     </div>
@@ -678,7 +806,7 @@ export default function VAuditorium({ events, applications: requests, today }: {
                   </div>
                   <div className="calendar-footer">
                     <span><span className="footer-live-dot" /> Schedule updates when an application is approved</span>
-                    <button className="text-action" onClick={() => notify('Calendar export will be available after backend integration.')}><Download size={14} /> Export calendar</button>
+                    <a className="text-action" href="/calendar.ics" download><Download size={14} /> Export calendar</a>
                   </div>
                 </section>
                 <section className="panel selected-day-panel">
@@ -688,8 +816,11 @@ export default function VAuditorium({ events, applications: requests, today }: {
                       <h2>{fmtDate(selectedDate, { weekday: 'short', day: 'numeric', month: 'long' })}</h2>
                       <p>{selectedEvents.length ? `${selectedEvents.length} scheduled ${selectedEvents.length === 1 ? 'event' : 'events'}` : 'No confirmed events'}</p>
                     </div>
-                    <span className={`date-status ${selectedEvents.length ? 'date-status-booked' : 'date-status-free'}`}><i />{selectedEvents.length ? 'Booked' : 'Available'}</span>
+                    <span className={`date-status ${selectedEvents.length ? 'date-status-booked' : 'date-status-free'}`}><i />{selectedFullyBooked ? 'Fully booked' : selectedEvents.length ? 'Partly booked' : 'Available'}</span>
                   </div>
+                  {selectedEvents.length > 0 && !selectedFullyBooked && selectedDate >= today && (
+                    <div className="free-slots"><Clock3 size={13} /><span>Free {selectedFree.map(f => `${f.start}–${f.end}`).join(', ')}</span>{role === 'Applier' && <button className="text-action" onClick={() => startBooking(selectedDate)}>Apply <ArrowUpRight size={13} /></button>}</div>
+                  )}
                   <div className="selected-events">
                     {selectedEvents.length ? selectedEvents.map(ev => (
                       <button className="event-card" key={String(ev.id)} onClick={() => setSelectedEvent(ev)}>
@@ -710,7 +841,7 @@ export default function VAuditorium({ events, applications: requests, today }: {
                         <div className="empty-icon"><CalendarDays size={22} /></div>
                         <strong>This date is open</strong>
                         <p>No confirmed booking on this date yet. Applications are subject to VDT approval.</p>
-                        {role === 'Applier' && <button className="btn btn-primary btn-small" onClick={() => { setBooking(p => ({ ...p, date: selectedDate })); setShowBooking(true); }}><Plus size={14} /> Apply for this date</button>}
+                        {role === 'Applier' && selectedDate >= today && <button className="btn btn-primary btn-small" onClick={() => startBooking(selectedDate)}><Plus size={14} /> Apply for this date</button>}
                         {role !== 'Applier' && <button className="btn btn-outline btn-small" onClick={() => notify('Switch to Applier in the role selector to preview the booking flow.')}>How to book <ArrowUpRight size={13} /></button>}
                       </div>
                     )}
@@ -724,15 +855,15 @@ export default function VAuditorium({ events, applications: requests, today }: {
               <section className="below-calendar">
                 <div className="section-heading">
                   <div><h2>Upcoming events</h2><p>Confirmed events across all VDT institutes</p></div>
-                  <button className="text-action" onClick={() => setActive('Past events')}>View event archive <ArrowUpRight size={14} /></button>
+                  <Link className="text-action" to={PAGES['Past events']}>View event archive <ArrowUpRight size={14} /></Link>
                 </div>
                 <div className="toolbar">
-                  <div className="search-field"><Search size={16} /><input value={query} onChange={e => setQuery(e.target.value)} placeholder="Search events, institutes..." aria-label="Search events" /><kbd>⌘ K</kbd></div>
+                  <div className="search-field"><Search size={16} /><input ref={searchRef} value={query} onChange={e => setQuery(e.target.value)} placeholder="Search events, institutes..." aria-label="Search events" /><kbd>⌘ K</kbd></div>
                   <div className="filter-field"><Filter size={15} /><select value={instituteFilter} onChange={e => setInstituteFilter(e.target.value)} aria-label="Filter by institute"><option>All institutes</option>{INSTITUTES.map(i => <option key={i}>{i}</option>)}</select></div>
                   <span className="results-count">{visibleEvents.length} events</span>
                 </div>
                 <div className="event-list">
-                  {visibleEvents.filter(e => e.date >= isoDate(year, month, 1)).sort((a, b) => a.date.localeCompare(b.date)).slice(0, 4).map(ev => (
+                  {upcoming.filter(e => visibleEvents.includes(e)).slice(0, 4).map(ev => (
                     <button className="event-row" key={String(ev.id)} onClick={() => setSelectedEvent(ev)}>
                       <div className="event-date-block">
                         <span>{fmtDate(ev.date, { month: 'short' }).toUpperCase()}</span>
@@ -746,7 +877,7 @@ export default function VAuditorium({ events, applications: requests, today }: {
                       <ArrowUpRight className="row-arrow" size={17} />
                     </button>
                   ))}
-                  {visibleEvents.filter(e => e.date >= isoDate(year, month, 1)).length === 0 && <div className="no-results">No events match these filters. Try another institute or search term.</div>}
+                  {upcoming.filter(e => visibleEvents.includes(e)).length === 0 && <div className="no-results">{query || instituteFilter !== 'All institutes' ? 'No upcoming events match these filters. Try another institute or search term.' : 'No upcoming events yet.'}</div>}
                 </div>
               </section>
             </>
@@ -783,23 +914,25 @@ export default function VAuditorium({ events, applications: requests, today }: {
             <>
               <PageTitle eyebrow="RESULTS &amp; RECOGNITION" title="Event outcomes" subtitle="Highlights, achievements and results from events hosted at V-Auditorium." />
               <div className="metric-grid">
-                <Metric icon={Trophy} label="Published outcomes" value="01" note="Across VDT institutes" />
-                <Metric icon={Users} label="Institutes represented" value="05" note="One shared community" />
-                <Metric icon={Video} label="Recorded events" value="01" note="Streams available where linked" />
+                <Metric icon={Trophy} label="Published outcomes" value={String(outcomes.length).padStart(2, '0')} note="Across VDT institutes" />
+                <Metric icon={Users} label="Institutes represented" value={String(new Set(outcomes.map(e => e.institute)).size).padStart(2, '0')} note="With published results" />
+                <Metric icon={Video} label="Recorded events" value={String(allEvents.filter(e => e.streamUrl).length).padStart(2, '0')} note="Streams available where linked" />
               </div>
               <div className="panel outcomes-panel">
-                <div className="panel-header"><div><h2>Published results</h2><p>Official event outcomes shared by organisers</p></div><span className="subtle-count">01 RESULT</span></div>
-                <div className="outcome-row">
-                  <div className="outcome-icon"><Trophy size={20} /></div>
-                  <div className="outcome-content">
-                    <span className="eyebrow">17 OCT 2026 <span className="eyebrow-separator">/</span> VIT</span>
-                    <h3>Welcome to VDT</h3>
-                    <p>Event completed successfully. The archive entry is available for viewers.</p>
-                    <span className="result-chip"><CheckCircle2 size={13} /> Published outcome</span>
+                <div className="panel-header"><div><h2>Published results</h2><p>Official event outcomes shared by organisers</p></div><span className="subtle-count">{String(outcomes.length).padStart(2, '0')} {outcomes.length === 1 ? 'RESULT' : 'RESULTS'}</span></div>
+                {outcomes.map(ev => (
+                  <div className="outcome-row" key={String(ev.id)}>
+                    <div className="outcome-icon"><Trophy size={20} /></div>
+                    <div className="outcome-content">
+                      <span className="eyebrow">{fmtDate(ev.date, { day: '2-digit', month: 'short', year: 'numeric' }).toUpperCase()} <span className="eyebrow-separator">/</span> {ev.institute}</span>
+                      <h3>{ev.title}</h3>
+                      <p>{ev.result}</p>
+                      <span className="result-chip"><CheckCircle2 size={13} /> Published outcome</span>
+                    </div>
+                    <button className="btn btn-outline btn-small" onClick={() => setSelectedEvent(ev)}>View event <ArrowUpRight size={14} /></button>
                   </div>
-                  <button className="btn btn-outline btn-small" onClick={() => { const ev = events.find(e => e.result); if (ev) setSelectedEvent(ev); }}>View event <ArrowUpRight size={14} /></button>
-                </div>
-                <div className="empty-inline"><Sparkles size={16} /><span>More results will appear here as organisers publish outcomes.</span></div>
+                ))}
+                <div className="empty-inline"><Sparkles size={16} /><span>{outcomes.length ? 'More results will appear here as organisers publish outcomes.' : 'No outcomes published yet. Results appear here once organisers share them.'}</span></div>
               </div>
             </>
           )}
@@ -811,20 +944,36 @@ export default function VAuditorium({ events, applications: requests, today }: {
                 <section className="panel suggestion-form-panel">
                   <div className="panel-header"><div><h2>Share an idea</h2><p>Suggestions are reviewed by the portal team.</p></div><span className="suggestion-spark"><Lightbulb size={19} /></span></div>
                   <form onSubmit={submitSuggestion} className="form-stack">
-                    <Field label="Your suggestion" required>
-                      <textarea value={suggestion} onChange={e => setSuggestion(e.target.value)} required minLength={8} placeholder="What would make the auditorium or booking experience better?" rows={5} />
+                    <Field label="Category">
+                      <select name="category" value={suggestionCategory} onChange={e => setSuggestionCategory(e.target.value)} disabled={suggestionBusy}>
+                        {SUGGESTION_CATEGORIES.map(c => <option key={c}>{c}</option>)}
+                      </select>
                     </Field>
-                    <p className="field-help">Avoid including personal or confidential information.</p>
-                    <button className="btn btn-primary" type="submit"><Send size={15} /> Submit suggestion</button>
+                    <Field label="Your suggestion" required>
+                      <textarea name="text" value={suggestion} onChange={e => setSuggestion(e.target.value)} required minLength={SUGGESTION_MIN_LENGTH} maxLength={SUGGESTION_MAX_LENGTH} placeholder="What would make the auditorium or booking experience better?" rows={5} disabled={suggestionBusy} />
+                      <span className="field-help">{suggestion.length}/{SUGGESTION_MAX_LENGTH} · Avoid including personal or confidential information.</span>
+                    </Field>
+                    {/* Honeypot: invisible to people, filled in by bots. */}
+                    <input type="text" name="website" tabIndex={-1} autoComplete="off" aria-hidden="true" className="hp-field" />
+                    {suggestionError && <div className="form-error" role="alert"><AlertCircle size={15} />{suggestionError}</div>}
+                    <button className="btn btn-primary" type="submit" disabled={suggestionBusy || suggestion.trim().length < SUGGESTION_MIN_LENGTH}><Send size={15} /> {suggestionBusy ? 'Sending…' : 'Submit suggestion'}</button>
                   </form>
                 </section>
                 <section className="suggestions-list-section">
-                  <div className="section-heading"><div><h2>Community ideas</h2><p>{suggestions.length} suggestion{suggestions.length === 1 ? '' : 's'} in this demo</p></div></div>
+                  <div className="section-heading"><div><h2>Community ideas</h2><p>{suggestions.length} suggestion{suggestions.length === 1 ? '' : 's'}</p></div></div>
+                  {suggestions.length === 0 && <EmptyState icon={Lightbulb} title="No suggestions yet" body="Be the first to share an idea." />}
                   {suggestions.map(s => (
                     <div className="panel suggestion-item" key={s.id}>
-                      <div className="suggestion-item-top"><span className="event-type">{s.category}</span><Status>{s.status}</Status></div>
+                      <div className="suggestion-item-top"><span className="event-type">{s.category}</span><Status>{s.statusLabel}</Status></div>
                       <p>{s.text}</p>
-                      <span className="suggestion-date">Submitted {s.date}</span>
+                      <div className="suggestion-item-bottom">
+                        <span className="suggestion-date">Submitted {s.date}</span>
+                        {role === 'Approver' && (
+                          <select className="suggestion-moderate" aria-label="Set suggestion status" value={s.status} onChange={e => moderateSuggestion(s.id, e.target.value as SuggestionStatus)}>
+                            {(Object.keys(SUGGESTION_STATUS_LABELS) as SuggestionStatus[]).map(k => <option key={k} value={k}>{k === 'hidden' ? 'Hide (spam / abuse)' : SUGGESTION_STATUS_LABELS[k]}</option>)}
+                          </select>
+                        )}
+                      </div>
                     </div>
                   ))}
                 </section>
@@ -835,15 +984,15 @@ export default function VAuditorium({ events, applications: requests, today }: {
           {active === 'New booking' && (
             <>
               <PageTitle eyebrow="BOOKING WORKSPACE" title="New booking request" subtitle="Submit an auditorium booking application for VDT-level approval." />
-              <BookingForm booking={booking} setBooking={setBooking} onSubmit={submitBooking} onCancel={() => setActive('Calendar')} error={formError} bookedOn={bookedOn} minDate={today} busy={busy} />
+              <BookingForm booking={booking} setBooking={setBooking} onSubmit={submitBooking} onCancel={() => navigate(-1)} error={formError} bookedOn={bookedOn} minDate={today} busy={busy} />
             </>
           )}
 
           {active === 'My applications' && (
             <>
-              <PageTitle eyebrow="BOOKING WORKSPACE" title="My applications" subtitle="Track booking requests and respond to requests for more information." actions={<button className="btn btn-primary" onClick={() => setShowBooking(true)}><Plus size={15} /> New application</button>} />
+              <PageTitle eyebrow="BOOKING WORKSPACE" title="My applications" subtitle="Track booking requests and respond to requests for more information." actions={<button className="btn btn-primary" onClick={() => startBooking()}><Plus size={15} /> New application</button>} />
               <div className="metric-grid">
-                <Metric icon={ClipboardList} label="Applications" value={String(requests.length).padStart(2, '0')} note="Submitted in this demo" />
+                <Metric icon={ClipboardList} label="Applications" value={String(requests.length).padStart(2, '0')} note="Submitted so far" />
                 <Metric icon={Clock3} label="In review" value={String(requests.filter(isOpen).length).padStart(2, '0')} note="Awaiting a decision" />
                 <Metric icon={CheckCircle2} label="Approved" value={String(requests.filter(r => r.status === 'approved').length).padStart(2, '0')} note="Confirmed bookings" />
               </div>
@@ -871,16 +1020,16 @@ export default function VAuditorium({ events, applications: requests, today }: {
 
           {active === 'Overview' && (
             <>
-              <PageTitle eyebrow="VDT ADMINISTRATION" title="Approval overview" subtitle="A clear view of auditorium requests and the shared schedule." actions={<button className="btn btn-primary" onClick={() => setActive('Applications')}>Review applications <ArrowUpRight size={15} /></button>} />
+              <PageTitle eyebrow="VDT ADMINISTRATION" title="Approval overview" subtitle="A clear view of auditorium requests and the shared schedule." actions={<Link className="btn btn-primary" to={PAGES.Applications}>Review applications <ArrowUpRight size={15} /></Link>} />
               <div className="metric-grid">
                 <Metric icon={ClipboardList} label="Awaiting review" value={String(pendingCount).padStart(2, '0')} note="Applications need attention" />
                 <Metric icon={CalendarCheck} label="Confirmed events" value={String(allEvents.filter(e => e.status === 'Booked').length).padStart(2, '0')} note="On the shared calendar" />
                 <Metric icon={Building2} label="Institutes" value="05" note="Sharing one auditorium" />
-                <Metric icon={Clock3} label="Next event" value="20 OCT" note="Annual Research Symposium" />
+                <Metric icon={Clock3} label="Next event" value={nextEvent ? fmtDate(nextEvent.date, { day: 'numeric', month: 'short' }).toUpperCase() : '—'} note={nextEvent ? nextEvent.title : 'Nothing scheduled'} />
               </div>
               <div className="overview-columns">
                 <div className="panel table-panel">
-                  <div className="panel-header"><div><h2>Needs your review</h2><p>Applications awaiting an approval decision</p></div><button className="text-action" onClick={() => setActive('Applications')}>View all <ArrowUpRight size={14} /></button></div>
+                  <div className="panel-header"><div><h2>Needs your review</h2><p>Applications awaiting an approval decision</p></div><Link className="text-action" to={PAGES.Applications}>View all <ArrowUpRight size={14} /></Link></div>
                   {requests.filter(isOpen).slice(0, 3).map(r => (
                     <button className="review-row" key={r.id} onClick={() => setSelectedRequest(r)}>
                       <span className="review-doc-icon"><FileText size={17} /></span>
@@ -894,7 +1043,7 @@ export default function VAuditorium({ events, applications: requests, today }: {
                   <div className="overview-note-icon"><ShieldCheck size={20} /></div>
                   <h3>One approval trail</h3>
                   <p>Keep queries, supporting documents and decisions together with each application.</p>
-                  <button className="text-action" onClick={() => setActive('Applications')}>Open approval queue <ArrowUpRight size={14} /></button>
+                  <Link className="text-action" to={PAGES.Applications}>Open approval queue <ArrowUpRight size={14} /></Link>
                 </div>
               </div>
             </>
@@ -937,18 +1086,6 @@ export default function VAuditorium({ events, applications: requests, today }: {
         </div>
       </main>
 
-      {showBooking && (
-        <div className="modal-backdrop" role="presentation" onMouseDown={e => { if (e.target === e.currentTarget) { setShowBooking(false); setFormError(''); } }}>
-          <div className="modal booking-modal" role="dialog" aria-modal="true" aria-labelledby="booking-title">
-            <div className="modal-header">
-              <div><div className="eyebrow">NEW APPLICATION <span className="eyebrow-separator">/</span> PHASE 02</div><h2 id="booking-title">Book V-Auditorium</h2><p>Provide the event details and supporting documents.</p></div>
-              <button className="icon-btn" aria-label="Close booking form" onClick={() => { setShowBooking(false); setFormError(''); }}><X size={19} /></button>
-            </div>
-            <BookingForm booking={booking} setBooking={setBooking} onSubmit={submitBooking} onCancel={() => { setShowBooking(false); setFormError(''); }} error={formError} bookedOn={bookedOn} minDate={today} busy={busy} compact />
-          </div>
-        </div>
-      )}
-
       {selectedEvent && (
         <div className="modal-backdrop" onMouseDown={e => { if (e.target === e.currentTarget) setSelectedEvent(null); }}>
           <div className="modal detail-modal" role="dialog" aria-modal="true" aria-labelledby="event-detail-title">
@@ -968,13 +1105,15 @@ export default function VAuditorium({ events, applications: requests, today }: {
             {selectedEvent.stream && (
               <div className="stream-banner">
                 <span><Video size={17} /></span>
-                <div><strong>Livestream / recording</strong><p>A stream is listed for this event. Link availability depends on the organiser.</p></div>
-                <button className="icon-btn" aria-label="Livestream information" onClick={() => notify('The YouTube URL must be added by the event organiser.')}><ExternalLink size={16} /></button>
+                <div><strong>Livestream / recording</strong><p>{selectedEvent.streamUrl ? 'Watch the stream or recording on YouTube.' : 'A stream is planned. The link appears here once the organiser adds it.'}</p></div>
+                {selectedEvent.streamUrl
+                  ? <a className="icon-btn" href={selectedEvent.streamUrl} target="_blank" rel="noopener noreferrer" aria-label="Watch the livestream"><ExternalLink size={16} /></a>
+                  : <button className="icon-btn" aria-label="Livestream information" onClick={() => notify('The organiser has not linked a stream yet.')}><ExternalLink size={16} /></button>}
               </div>
             )}
             <div className="modal-actions">
               <button className="btn btn-outline" onClick={() => setSelectedEvent(null)}>Close</button>
-              {role === 'Applier' && selectedEvent.status !== 'Past event' && <button className="btn btn-primary" onClick={() => { setBooking(p => ({ ...p, date: selectedEvent.date })); setSelectedEvent(null); setShowBooking(true); }}>Apply for a date <ArrowUpRight size={14} /></button>}
+              {role === 'Applier' && selectedEvent.status !== 'Past event' && <button className="btn btn-primary" onClick={() => startBooking(selectedEvent.date)}>Apply for another slot this day <ArrowUpRight size={14} /></button>}
             </div>
           </div>
         </div>

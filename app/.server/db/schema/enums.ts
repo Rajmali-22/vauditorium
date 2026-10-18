@@ -53,9 +53,11 @@ export const messageKindEnum = pgEnum("message_kind", [
 // Who wrote a trail entry. Replaced by a user reference once auth lands.
 export const authorRoleEnum = pgEnum("author_role", ["applier", "approver"]);
 
+// hidden takes spam or abuse off the public list without deleting the record.
 export const suggestionStatusEnum = pgEnum("suggestion_status", [
   "open",
   "under_consideration",
   "planned",
   "declined",
+  "hidden",
 ]);

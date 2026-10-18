@@ -118,8 +118,10 @@ await db.insert(applicationMessages).values([
 ]);
 
 await db.insert(suggestions).values([
-  { body: "Add a dedicated student club showcase day", category: "Events", status: "under_consideration" },
+  { body: "Add a dedicated student club showcase day", category: "Events", status: "under_consideration", createdAt: new Date("2026-10-12T10:00:00+05:30") },
+  { body: "Publish the livestream link on the event page a day in advance", category: "Events", status: "planned", createdAt: new Date("2026-10-13T15:30:00+05:30") },
+  { body: "More charging points near the auditorium seating for hackathons", category: "Facilities", status: "open", createdAt: new Date("2026-10-15T09:10:00+05:30") },
 ]);
 
 await closeDb();
-console.log("Seeded 7 events, 2 applications, 4 documents, 1 suggestion.");
+console.log("Seeded 7 events, 2 applications, 4 documents, 3 suggestions.");

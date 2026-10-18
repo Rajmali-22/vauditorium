@@ -2,11 +2,14 @@ import type { Route } from "./+types/home";
 import VAuditorium, { type EventItem } from "../vauditorium/VAuditorium";
 import { listApplications } from "~/.server/db/queries/applications";
 import { listCalendarEvents } from "~/.server/db/queries/events";
+import { listSuggestions } from "~/.server/db/queries/suggestions";
 import { EVENT_TYPE_LABELS, addMonths, formatTimeRange, istDate } from "~/lib/events";
+import { pageForSlug } from "~/lib/pages";
 
-export function meta({}: Route.MetaArgs) {
+export function meta({ params }: Route.MetaArgs) {
+  const page = pageForSlug(params.page);
   return [
-    { title: "VAuditorium — VDT Portal" },
+    { title: !page || page === "Calendar" ? "VAuditorium — VDT Portal" : `${page} — VAuditorium` },
     { name: "description", content: "Shared auditorium booking and event calendar for the VDT community of institutes." },
   ];
 }
@@ -17,13 +20,16 @@ export function meta({}: Route.MetaArgs) {
 // from one list.
 const WINDOW_MONTHS = 12;
 
-export async function loader({}: Route.LoaderArgs) {
+export async function loader({ params }: Route.LoaderArgs) {
+  if (!pageForSlug(params.page)) throw new Response("Not found", { status: 404 });
+
   const today = istDate();
   // TODO(auth): applications carry contact details. Load them only for a
   // signed-in applier (their own) or approver (all), never for viewers.
-  const [rows, applications] = await Promise.all([
+  const [rows, applications, suggestions] = await Promise.all([
     listCalendarEvents(addMonths(today, -WINDOW_MONTHS), addMonths(today, WINDOW_MONTHS)),
     listApplications(),
+    listSuggestions(),
   ]);
 
   const events: EventItem[] = rows.map((e) => ({
@@ -45,9 +51,9 @@ export async function loader({}: Route.LoaderArgs) {
     streamUrl: e.livestreamUrl ?? undefined,
   }));
 
-  return { events, applications, today };
+  return { events, applications, suggestions, today };
 }
 
 export default function Home({ loaderData }: Route.ComponentProps) {
-  return <VAuditorium events={loaderData.events} applications={loaderData.applications} today={loaderData.today} />;
+  return <VAuditorium {...loaderData} />;
 }
