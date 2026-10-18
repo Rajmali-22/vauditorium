@@ -34,6 +34,47 @@ npm run dev
 
 Your application will be available at `http://localhost:5173`.
 
+## Backend
+
+Server code lives in `app/.server/` (never bundled for the browser) and runs in
+React Router loaders and actions, deployed serverless. Data is Postgres:
+[Neon](https://neon.com) in production, through [Drizzle ORM](https://orm.drizzle.team).
+
+### Local database
+
+No Docker or Postgres install needed. The default runs Postgres in-process with
+[PGlite](https://pglite.dev), stored in `./.pglite`:
+
+```bash
+cp .env.example .env
+npm run db:migrate   # create the tables
+npm run db:seed      # demo events, applications and a suggestion
+npm run dev
+```
+
+Only one process can open the PGlite folder at a time, so stop `npm run dev`
+before running `db:seed` or `db:studio`. To use a Postgres you run yourself, or
+Neon, change `DATABASE_URL` in `.env` (examples in `.env.example`).
+
+### Schema changes
+
+Edit the tables in `app/.server/db/schema/`, then:
+
+```bash
+npm run db:generate   # writes a SQL migration to app/.server/db/migrations
+npm run db:migrate    # applies it
+```
+
+Commit the generated migration with the schema change.
+
+| Table                   | Holds                                                       |
+| ----------------------- | ----------------------------------------------------------- |
+| `events`                | The public calendar. At most one confirmed event per day.   |
+| `applications`          | Booking requests, from submission to approval or decline.   |
+| `application_documents` | Permission letters and documents attached to an application |
+| `application_messages`  | The approval trail: queries, document requests, decisions   |
+| `suggestions`           | The public suggestion box                                   |
+
 ## Building for Production
 
 Create a production build:
